@@ -1,1 +1,32 @@
+---
+title: "Homework 2: Using Spatial Lag, Spatial Error and Geographically Weighted Regression to Predict Median House Values in Philadelphia Block Groups"
+authors: Chloe Alimurong, Sophia Meyers & Evelyn Zhong
+date: October 14, 2026
+output: rmdformats::readthedown
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+# Introduction
 
+# Methods
+
+## A Description of the Concept of Spatial Autocorrelation
+
+## A Review of OLS Regression and Assumptions
+
+## Spatial Lag and Spatial Error Regression
+
+## Geographically Weighted Regression
+
+# Results
+
+## Spatial Autocorrelation
+
+## A Review of OLS Regression and Assumptions: Results
+
+## Spatial Lag and Spatial Error Regression Results
+
+## Geographically Weighted Regression Results
+
+# Discussion
