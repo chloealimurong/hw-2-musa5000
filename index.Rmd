@@ -15,11 +15,11 @@ editor_options:
 
 ## A Review of OLS Regression and Assumptions
 
+# Results
+
 ## Spatial Lag and Spatial Error Regression
 
 ## Geographically Weighted Regression
-
-# Results
 
 ## Spatial Autocorrelation
 
