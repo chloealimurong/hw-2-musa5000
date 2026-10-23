@@ -1,6 +1,6 @@
 ---
 title: "Homework 2: Using Spatial Lag, Spatial Error and Geographically Weighted Regression to Predict Median House Values in Philadelphia Block Groups"
-authors: Chloe Alimurong, Sophia Meyers & Evelyn Zhong
+author: Chloe Alimurong, Sophia Meyers & Evelyn Zhong
 date: October 14, 2026
 output: rmdformats::readthedown
 editor_options: 
@@ -9,23 +9,224 @@ editor_options:
 ---
 # Introduction
 
+Median house values are an indicator of neighborhood economic health, and in Philadelphia they can be highly spatially variable. This report examines median house values at the Census block group level in Philadelphia. In our previous report, we used ordinary least squares (OLS) regression to examine the relationship between the natural log of median house value (LNMEDHVAL) and four neighborhood characteristics: the proportion of residents with at least a bachelor’s degree (PCTBACHMOR), the proportion of vacant housing units (PCTVACANT), the percentage of detached single-family homes (PCTSINGLES), and the natural log of the number of households living in poverty (LNNBELPOV). All four predictors were significant, and together they explained about 66% of the variation in LNMEDHVAL.
+
+However, OLS is often inappropriate for datasets with a spatial component. Block groups that are close together tend to resemble one another, so their regression errors are likely to be correlated, which violates the OLS assumption that errors are independent. When this happens, standard errors and significance tests can be misleading. The purpose of this report is to use spatial lag, spatial error and geographically weighted regression (GWR) to account for this spatial dependence, and to determine whether these methods perform better than OLS in explaining median house values in Philadelphia.
+
+```{r}
+#| label: setup
+#| warning: false
+#| message: false 
+#| include: FALSE
+
+library(sf)
+library(spdep)
+library(spatialreg)
+library(tidyverse)
+
+df <- st_read("data/RegressionData.shp/RegressionData.shp")
+nrow(df)
+
+# log of value + 1
+df <- df %>%
+  mutate(LNMEDHVAL = log(MEDHVAL + 1),
+         LNNBELPOV = log(NBelPov100 + 1))
+
+nb <- poly2nb(df, queen = TRUE)
+lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+summary(nb)
+
+f   <- LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV
+ols <- lm(f, data = df)
+summary(ols)
+```
+
 # Methods
 
 ## A Description of the Concept of Spatial Autocorrelation
 
 ## A Review of OLS Regression and Assumptions
 
-# Results
-
 ## Spatial Lag and Spatial Error Regression
 
+We ran the spatial lag and spatial error regressions in R, using the spdep and spatialreg packages. Both models use the row-standardized Queen contiguity weight matrix described in the previous subsection and are estimated by maximum likelihood. The dependent variable and the predictors are the same as in the OLS model.
+
+The spatial lag model is appropriate when the value of the dependent variable in one location depends directly on the values in neighboring locations. Here, the median house value in a block group is partly shaped by the median house values of the block groups that touch it. The model adds a spatially lagged dependent variable (the weighted average of neighboring values) as an additional predictor:
+
+$$LNMEDHVAL_i = \rho \sum_{j} w_{ij}\, LNMEDHVAL_j + \beta_0 + \beta_1 PCTVACANT_i + \beta_2 PCTSINGLES_i + \beta_3 PCTBACHMOR_i + \beta_4 LNNBELPOV_i + \varepsilon_i$$
+Here $LNMEDHVAL_i$ is the dependent variable for block group $i$. The term $w_{ij}$ is the row-standardized weight between block groups $i$ and $j$ (nonzero only if they are Queen neighbors), so $\sum_j w_{ij} LNMEDHVAL_j$ is the average value among the neighbors of block group $i$. The coefficient $\rho$ is the spatial lag parameter, which measures the strength of the dependence on neighboring values. The term $\beta_0$ is the intercept, $\beta_1$ through $\beta_4$ are the coefficients of the four predictors, and $\varepsilon_i$ is the random error, assumed to be independent with constant variance.
+
+The spatial error model is appropriate when the spatial dependence operates through the errors rather than through the dependent variable itself. This can happen when important variables that are themselves spatially patterned are omitted from the model, or when the scale of the data does not match the scale of the underlying process. The model is:
+
+$$LNMEDHVAL_i = \beta_0 + \beta_1 PCTVACANT_i + \beta_2 PCTSINGLES_i + \beta_3 PCTBACHMOR_i + \beta_4 LNNBELPOV_i + u_i$$
+$$u_i = \lambda \sum_{j} w_{ij}\, u_j + \varepsilon_i$$
+
+Here $u_i$ is the spatially correlated error for block group $i$, equal to $\lambda$ times the weighted average of the errors of its neighbors plus a random component. The coefficient $\lambda$ is the spatial error parameter, which measures the strength of the spatial dependence in the errors. The term $\varepsilon_i$ is the independent random error, and $\beta_0$ through $\beta_4$ and $w_{ij}$ are defined as above.
+
+The other assumptions of OLS (linearity, normality of errors, homoscedasticity, and no severe multicollinearity) are still required for both models. Only the assumption of independence of observations is relaxed. The goal of both methods is to account for the spatial dependence in the data so that the regression residuals no longer exhibit spatial autocorrelation. We compare the spatial lag model with OLS, and the spatial error model with OLS, using several criteria, and decide whether the spatial models perform better.
+
+The log likelihood measures how well a model fits the data and is the quantity maximized in maximum likelihood estimation. A higher (less negative) log likelihood indicates a better fit.
+
+Akaike Information Criterion (AIC) and Schwarz Criterion (SC). These are defined as $AIC = 2k - 2\ln(\hat{L})$ and $SC = k\ln(n) - 2\ln(\hat{L})$, where $k$ is the number of estimated parameters, $n$ is the number of observations and $\hat{L}$ is the maximized likelihood. Both reward fit while penalizing the number of parameters, and SC penalizes more heavily. The model with the lower AIC and SC is preferred. Unlike the likelihood ratio test, these criteria can also be used to compare non-nested models, such as the spatial lag and spatial error models.
+
+Likelihood ratio test. OLS is a special case of both spatial models (when $\rho = 0$ or $\lambda = 0$), so it is nested within each, and the likelihood ratio test applies. The test statistic is $LR = 2(\ln L_{spatial} - \ln L_{OLS})$, which follows a chi-squared distribution with one degree of freedom. The null hypothesis is that the OLS model fits as well as the spatial model (the spatial parameter equals zero), and the alternative is that the spatial model fits significantly better. A p-value below 0.05 leads us to reject the null in favor of the spatial model. The test cannot be used to compare the spatial lag model with the spatial error model, because neither is nested within the other.
+
+Breusch-Pagan test. For each spatial model we also test the residuals for heteroscedasticity. The null hypothesis is that the errors have constant variance, and the alternative is that the variance changes with the predictors. A p-value below 0.05 indicates that heteroscedasticity remains.
+
+A further way to compare OLS with the spatial models is to examine the Moran’s I of the regression residuals, using 999 random permutations to assess significance, as described earlier. If a spatial model has accounted for the spatial dependence, the Moran’s I of its residuals should be close to zero and lower in magnitude than the Moran’s I of the OLS residuals. The model with the smaller residual Moran’s I (closer to zero) is considered to do a better job of removing spatial autocorrelation.
+
 ## Geographically Weighted Regression
+
+# Results
 
 ## Spatial Autocorrelation
 
 ## A Review of OLS Regression and Assumptions: Results
 
 ## Spatial Lag and Spatial Error Regression Results
+
+```{r}
+#| label: Spatial lag and spatial error models
+#| include: FALSE
+
+lag_model <- lagsarlm(f, data = df, listw = lw, zero.policy = TRUE)
+err_model <- errorsarlm(f, data = df, listw = lw, zero.policy = TRUE)
+summary(lag_model)
+summary(err_model)
+
+
+make_tab <- function(m, par_name, par_val, par_se) {
+  cf <- as.data.frame(summary(m)$Coef)
+  names(cf) <- c("Estimate", "Std. Error", "z value", "Pr(>|z|)")
+  extra <- data.frame(Estimate = par_val, `Std. Error` = par_se,
+                      `z value` = par_val / par_se,
+                      `Pr(>|z|)` = 2 * pnorm(-abs(par_val / par_se)),
+                      check.names = FALSE, row.names = par_name)
+  rbind(extra, cf)
+}
+
+tab2 <- make_tab(lag_model, "Rho (W_LNMEDHVAL)", lag_model$rho,    lag_model$rho.se)
+tab3 <- make_tab(err_model, "Lambda",            err_model$lambda, err_model$lambda.se)
+
+knitr::kable(tab2, digits = 4, caption = "Table 2. Spatial lag regression results")
+knitr::kable(tab3, digits = 4, caption = "Table 3. Spatial error regression results")
+
+
+bptest.Sarlm(lag_model)
+bptest.Sarlm(err_model)
+
+fit_tab <- data.frame(
+  Model  = c("OLS", "Spatial Lag", "Spatial Error"),
+  LogLik = c(logLik(ols), logLik(lag_model), logLik(err_model)),
+  AIC    = c(AIC(ols), AIC(lag_model), AIC(err_model)),
+  BIC    = c(BIC(ols), BIC(lag_model), BIC(err_model))
+)
+knitr::kable(fit_tab, digits = 2, caption = "Model fit comparison")
+
+anova(lag_model, ols) 
+anova(err_model, ols)
+
+# Moran's I of residuals (999 permutations)
+df$ols_res <- residuals(ols)
+df$lag_res <- residuals(lag_model)
+df$err_res <- residuals(err_model)
+
+set.seed(500)
+mc_ols <- moran.mc(df$ols_res, lw, nsim = 999, zero.policy = TRUE, alternative = "two.sided")
+mc_lag <- moran.mc(df$lag_res, lw, nsim = 999, zero.policy = TRUE, alternative = "two.sided")
+mc_err <- moran.mc(df$err_res, lw, nsim = 999, zero.policy = TRUE, alternative = "two.sided")
+
+moran_tab <- data.frame(
+  Residuals = c("OLS", "Spatial Lag", "Spatial Error"),
+  MoranI    = c(mc_ols$statistic, mc_lag$statistic, mc_err$statistic),
+  p_value   = c(mc_ols$p.value, mc_lag$p.value, mc_err$p.value)
+)
+knitr::kable(moran_tab, digits = 4)
+
+# Figures
+moran.plot(df$lag_res, lw, zero.policy = TRUE,
+           xlab = "Spatial lag residuals", ylab = "Lagged residuals")
+plot(mc_lag, main = "Moran's I permutations: spatial lag residuals")
+moran.plot(df$err_res, lw, zero.policy = TRUE,
+           xlab = "Spatial error residuals", ylab = "Lagged residuals")
+plot(mc_err, main = "Moran's I permutations: spatial error residuals")
+
+#print values
+mc_lag
+mc_err
+lr <- 2 * (as.numeric(logLik(lag_model)) - as.numeric(logLik(ols)))
+pchisq(lr, df = 1, lower.tail = FALSE)
+print(bptest.Sarlm(lag_model))
+print(bptest.Sarlm(err_model))
+print(anova(lag_model, ols))
+print(anova(err_model, ols))
+print(summary(ols))
+set.seed(500)
+print(moran.mc(df$ols_res, lw, nsim = 999, zero.policy = TRUE, alternative = "two.sided"))
+print(fit_tab)
+print(summary(nb))
+```
+```{r}
+#| include: FALSE
+#Exporting if partners want to work with residual shapefiles in GEODA
+dir.create("outputs", showWarnings = FALSE)
+st_write(df, "data/outputs/RegressionWithResiduals.shp", delete_layer = TRUE)
+```
+
+
+The Queen weight matrix links all 1,720 block groups, with an average of about six neighbors each, and no block group is without a neighbor. The OLS residuals are strongly spatially autocorrelated (Moran’s I = 0.313, p = 0.001 from 999 permutations), which motivates the spatial models below.
+
+
+```{r table2, echo=FALSE}
+knitr::kable(tab2, digits = 4, caption = "Table 2. Spatial lag regression results")
+```
+
+Table 2 presents the spatial lag regression results. The spatial lag term, W_LNMEDHVAL (Rho), is positive and highly significant (ρ = 0.651, z = 36.07, p < 0.0001). Holding the predictors constant, block groups tend to have higher median house values when their neighbors have higher values, so house values in Philadelphia are strongly spatially dependent. All four predictors remain significant at the 0.001 level, with the same signs as in OLS. PCTVACANT (-0.0085) and LNNBELPOV (-0.0341) are negatively associated with LNMEDHVAL, while PCTSINGLES (0.0020) and PCTBACHMOR (0.0085) are positively associated. However, the coefficients are noticeably smaller in magnitude than in OLS. For example, PCTBACHMOR falls from 0.0209 to 0.0085, PCTVACANT from -0.0192 to -0.0085, LNNBELPOV from -0.0789 to -0.0341, and PCTSINGLES from 0.0030 to 0.0020. This suggests that part of the apparent effect of the predictors in OLS was actually picking up the influence of neighboring values. Because of the lag term, these coefficients should not be read as the full effect of a predictor, since a change in one block group is also transmitted to its neighbors.
+
+The Breusch-Pagan test on the spatial lag residuals is significant (BP = 51.41, df = 4, p < 0.0001), so we reject the null hypothesis of constant variance. The spatial lag residuals are still heteroscedastic.
+
+```{r table4, echo=FALSE}
+knitr::kable(fit_tab, digits = 2,
+             caption = "Table 4. Comparison of OLS, spatial lag and spatial error models")
+```
+
+Table 4 compares the models. Relative to OLS, the spatial lag model has a much higher log likelihood (-255.74 vs. -711.49) and much lower AIC (525.48 vs. 1434.99) and SC (563.63 vs. 1467.69). The likelihood ratio test is also highly significant (LR = 911.51, df = 1, p < 0.0001), so we reject the null hypothesis that OLS fits as well as the spatial lag model. On every one of these criteria the spatial lag model is clearly better than OLS.
+
+```{r moran-lag-fig, echo=FALSE, fig.cap="Figure X. Moran's I of spatial lag regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+par(mfrow = c(1, 2))
+moran.plot(df$lag_res, lw, zero.policy = TRUE,
+           xlab = "Spatial lag residuals", ylab = "Lagged residuals",
+           main = "Moran scatterplot")
+plot(mc_lag, main = "Permutation test (999 runs)", xlab = "Moran's I")
+par(mfrow = c(1, 1))
+```
+
+The Moran’s I of the spatial lag residuals is -0.082, compared with 0.313 for the OLS residuals, so the strong positive spatial autocorrelation present in OLS has been removed. The two-sided permutation test is significant (p = 0.002) only because the statistic falls slightly below the permuted values, indicating a small amount of negative autocorrelation, which is far weaker in magnitude than the original positive autocorrelation. Overall, the spatial lag model performs better than OLS on the log likelihood, AIC, SC, likelihood ratio test and residual spatial autocorrelation, although heteroscedasticity remains.
+
+
+```{r table3, echo=FALSE}
+knitr::kable(tab3, digits = 4,
+             caption = "Table 3. Spatial error regression results (dependent variable: LNMEDHVAL)")
+```
+
+Table 3 presents the spatial error regression results. The spatial error term, Lambda, is positive and highly significant (λ = 0.815, z = 49.77, p < 0.0001). This indicates strong positive spatial dependence in the errors: the variation in house values not explained by the four predictors is similar among neighboring block groups, which is consistent with omitted variables that are themselves spatially patterned. All four predictors remain significant (p < 0.0001), with the same signs as in OLS: PCTVACANT (-0.0058), PCTSINGLES (0.0027), PCTBACHMOR (0.0098) and LNNBELPOV (-0.0345). As in the lag model, the coefficients for PCTVACANT, PCTBACHMOR and LNNBELPOV are smaller in magnitude than their OLS counterparts (-0.0192, 0.0209 and -0.0789), while PCTSINGLES (0.0027 vs. 0.0030) is nearly unchanged.
+
+The Breusch-Pagan test on the spatial error residuals is not significant (BP = 5.16, df = 4, p = 0.271), so we fail to reject the null hypothesis of constant variance. Unlike the spatial lag model, there is no evidence of heteroscedasticity in the spatial error residuals.
+
+Relative to OLS, the spatial error model has a higher log likelihood (-372.69 vs. -711.49) and lower AIC (759.38 vs. 1434.99) and SC (797.53 vs. 1467.69). The likelihood ratio test is highly significant (LR = 677.61, df = 1, p < 0.0001), so the spatial error model fits significantly better than OLS.
+
+```{r moran-error-fig, echo=FALSE, fig.cap="Figure Y. Moran's I of spatial error regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+par(mfrow = c(1, 2))
+moran.plot(df$err_res, lw, zero.policy = TRUE,
+           xlab = "Spatial error residuals", ylab = "Lagged residuals",
+           main = "Moran scatterplot")
+plot(mc_err, main = "Permutation test (999 runs)", xlab = "Moran's I")
+par(mfrow = c(1, 1))
+```
+
+The Moran’s I of the spatial error residuals is -0.095 (two-sided permutation p = 0.002), which is much closer to zero than the OLS value of 0.313, again leaving only a slight negative autocorrelation. Overall, the spatial error model performs better than OLS on every criterion, and it also resolves the heteroscedasticity problem.
+
+Because neither model is nested within the other, we do not use the likelihood ratio test to compare them and rely instead on AIC and SC. The spatial lag model has the lower AIC (525.48 vs. 759.38) and the lower SC (563.63 vs. 797.53), as well as the higher log likelihood (-255.74 vs. -372.69), so it fits better than the spatial error model. Its residual Moran’s I (-0.082) is also slightly closer to zero than that of the spatial error model (-0.095). The one advantage of the spatial error model is that its residuals are not heteroscedastic, whereas the spatial lag residuals are. Overall, both spatial models improve substantially on OLS, and the spatial lag model is the better of the two on the fit criteria, though the remaining heteroscedasticity is a limitation that should be kept in mind.
 
 ## Geographically Weighted Regression Results
 
