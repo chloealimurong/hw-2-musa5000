@@ -44,8 +44,131 @@ summary(ols)
 # Methods
 
 ## A Description of the Concept of Spatial Autocorrelation
+```{r}
+#| label: p1-compute
+#| include: false
+
+library(lmtest)
+
+fmt_p <- function(p) ifelse(p < 0.001, "< 0.001",
+                            paste("=", formatC(p, format = "f", digits = 3)))
+
+# Weight matrix summary
+n_bg   <- nrow(df)
+nb_ct  <- card(nb)
+avg_nb <- mean(nb_ct)
+min_nb <- min(nb_ct)
+max_nb <- max(nb_ct)
+
+# Global Moran's I of the dependent variable (999 permutations)
+set.seed(500)
+mc_dv <- moran.mc(df$LNMEDHVAL, lw, nsim = 999, zero.policy = TRUE,
+                  alternative = "two.sided")
+
+# Local Moran's I (LISA), 999 conditional permutations
+set.seed(500)
+lisa <- localmoran_perm(df$LNMEDHVAL, lw, nsim = 999, zero.policy = TRUE)
+df$lisa_p    <- lisa[, "Pr(folded) Sim"]
+df$lisa_quad <- as.character(attr(lisa, "quadr")$mean)
+df$lisa_cluster <- factor(
+  ifelse(df$lisa_p <= 0.05, df$lisa_quad, "Not significant"),
+  levels = c("Not significant", "High-High", "Low-Low", "Low-High", "High-Low"))
+df$lisa_sig <- cut(df$lisa_p, breaks = c(0, 0.001, 0.01, 0.05, 1),
+                   labels = c("p <= 0.001", "p <= 0.01", "p <= 0.05", "Not significant"),
+                   include.lowest = TRUE)
+lisa_ct <- table(df$lisa_cluster)
+
+# OLS summary
+ols_sum <- summary(ols)
+r2      <- ols_sum$r.squared
+adj_r2  <- ols_sum$adj.r.squared
+fst     <- ols_sum$fstatistic
+f_p     <- pf(fst[1], fst[2], fst[3], lower.tail = FALSE)
+tab1    <- as.data.frame(coef(ols_sum))
+
+# Heteroscedasticity tests
+dfd <- st_drop_geometry(df)
+bp_test    <- bptest(ols, studentize = FALSE)   # Breusch-Pagan
+kb_test    <- bptest(ols)                       # Koenker-Bassett (studentized BP)
+white_test <- bptest(ols, ~ (PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV)^2 +
+                       I(PCTVACANT^2) + I(PCTSINGLES^2) + I(PCTBACHMOR^2) + I(LNNBELPOV^2),
+                     data = dfd)                # White
+
+# Jarque-Bera test of normality of residuals
+e  <- residuals(ols)
+ec <- e - mean(e)
+S  <- mean(ec^3) / mean(ec^2)^1.5
+K  <- mean(ec^4) / mean(ec^2)^2
+jb   <- length(e) / 6 * (S^2 + (K - 3)^2 / 4)
+jb_p <- pchisq(jb, df = 2, lower.tail = FALSE)
+
+diag_tab <- data.frame(
+  Test      = c("Breusch-Pagan", "Koenker-Bassett", "White", "Jarque-Bera"),
+  Statistic = c(bp_test$statistic, kb_test$statistic, white_test$statistic, jb),
+  df        = c(bp_test$parameter, kb_test$parameter, white_test$parameter, 2),
+  p_value   = c(bp_test$p.value, kb_test$p.value, white_test$p.value, jb_p)
+)
+
+# Residuals, fitted values, and weighted (spatially lagged) residuals
+df$ols_res <- residuals(ols)
+df$ols_fit <- fitted(ols)
+df$ols_std <- rstandard(ols)
+df$wt_res  <- lag.listw(lw, df$ols_res, zero.policy = TRUE)
+
+slope_mod <- lm(ols_res ~ wt_res, data = st_drop_geometry(df))
+slope_b   <- coef(summary(slope_mod))["wt_res", ]
+
+# Moran's I of OLS residuals (same seed as Person 2's chunk, so values match)
+set.seed(500)
+mc_ols <- moran.mc(df$ols_res, lw, nsim = 999, zero.policy = TRUE,
+                   alternative = "two.sided")
+```
+
+Spatial autocorrelation measures the degree to which values at nearby locations tend to be similar. It follows from Tobler's First Law of Geography: everything is related to everything else, but near things are more related than distant things. If high values sit next to high values and low values sit next to low values, the variable has positive spatial autocorrelation. If neighbors tend to be different from each other, it has negative spatial autocorrelation. If values are arranged randomly, there is no spatial autocorrelation.
+
+We measure global spatial autocorrelation with Moran's I:
+
+$$I = \frac{n}{\sum_{i}\sum_{j} w_{ij}} \cdot \frac{\sum_{i}\sum_{j} w_{ij}\,(X_i - \bar{X})(X_j - \bar{X})}{\sum_{i} (X_i - \bar{X})^2}$$
+
+where $n$ is the number of block groups (`r format(n_bg, big.mark = ",")`), $X_i$ is the value of the variable in block group $i$, $X_j$ is the value in block group $j$, $\bar{X}$ is the mean of the variable, and $w_{ij}$ is the spatial weight between block groups $i$ and $j$. The numerator is considered large and positive when a block group and its neighbors are both above the mean or both below it. The denominator is the total variance of the variable, which puts the statistic on a standard scale. Moran's I usually ranges from -1 (perfect dispersion) to 1 (perfect clustering), and its expected value under no spatial autocorrelation is $-1/(n-1)$, which is close to 0.
+
+In this report, we use a Queen contiguity weight matrix. Two block groups are neighbors if they share a border or a corner. In the matrix, $w_{ij} = 1$ if block groups $i$ and $j$ are neighbors and $w_{ij} = 0$ otherwise, and a block group is not its own neighbor ($w_{ii} = 0$). The matrix is row-standardized, meaning each weight is divided by the number of neighbors, so each row sums to 1. Every block group in our data has at least one neighbor, and the average block group has about `r round(avg_nb, 1)` neighbors (range: `r min_nb` to `r max_nb`). We will use this same weight matrix throughout the report.
+
+At times, statisticians may run their analysis with more than one weight matrix, such as Rook contiguity, k-nearest neighbors, or a distance band since results can depend on how "neighbor" is defined. If the conclusions are similar across several weight matrices, the results are robust and are less likely to be an artifact of one particular choice.
+
+To test whether Moran's I is significant, we use a random permutation test. The null hypothesis is that there is no spatial autocorrelation ($H_0: I = 0$), and the alternative hypothesis is that there is spatial autocorrelation ($H_a: I \neq 0$). In each permutation, the observed values are randomly shuffled across the block groups while the weight matrix stays the same, and Moran's I is recalculated. We do this 999 times to build a reference distribution of Moran's I under spatial randomness. The pseudo p-value is the number of permuted Moran's I values at least as extreme as the observed value, plus 1, divided by 1,000. If the pseudo p-value is less than 0.05, we reject the null hypothesis.
+
+Global Moran's I gives a single value for the entire city. Local Moran's I, also called a Local Indicator of Spatial Association (LISA), calculates a separate value for each block group to show where clustering happens. Each block group is placed into one of four categories based on its own value and the average value of its neighbors, compared to the citywide mean. High-High and Low-Low block groups are clusters of similar values. High-Low and Low-High block groups are spatial outliers, where one block group is very different from its neighbors. To test significance, the value of block group $i$ is held fixed while the values of the other block groups are randomly shuffled among its neighbors 999 times. This gives a pseudo p-value for each block group. The significance map shows these p-values, and the cluster map shows the four categories for block groups that are significant at p ≤ 0.05.
 
 ## A Review of OLS Regression and Assumptions
+
+The spatial autocorrelation tests described above can also be applied to regression residuals, which is how we check one of the key assumptions of OLS regression. In our HW 1 report, we used OLS regression to model the relationship between median house values and four neighborhood characteristics:
+
+$$LNMEDHVAL_i = \beta_0 + \beta_1 PCTVACANT_i + \beta_2 PCTSINGLES_i + \beta_3 PCTBACHMOR_i + \beta_4 LNNBELPOV_i + \varepsilon_i$$
+
+where $LNMEDHVAL_i$ is the natural log of median house value in block group $i$, $\beta_0$ is the intercept, $\beta_1$ through $\beta_4$ are the coefficients of the four predictors, and $\varepsilon_i$ is the residual (error) for block group $i$. OLS chooses the coefficients that minimize the sum of squared residuals, $\sum_i (y_i - \hat{y}_i)^2$, where $y_i$ is the observed value of LNMEDHVAL and $\hat{y}_i$ is the value predicted by the model.
+
+OLS regression rests on five main assumptions. The first is linearity: the relationship between the dependent variable and each predictor should be a straight line, so a one-unit increase in a predictor is associated with the same change in the dependent variable no matter where on the scale it occurs. The second is independence of observations, meaning the residual for one block group should tell us nothing about the residual for any other. This is the assumption most likely to fail with spatial data.
+
+The third assumption is homoscedasticity where the residuals should have roughly the same variance at every predicted value. When the spread of the residuals changes across predicted values (heteroscedasticity), the standard errors are no longer accurate, and neither are the p-values based on them. The fourth is that residuals should follow a normal distribution centered on zero. This matters most for the validity of the t-tests and the F-test. 
+
+The last assumption is that there is no severe multicollinearity, meaning the predictors should not be too strongly correlated with one another. When two predictors move closely together, the model has trouble separating their individual effects, which leads to inflated standard errors and unstable coefficient estimates. Multicollinearity concerns only the relationships among predictors. A strong correlation between the dependent variable and a predictor is a good thing, since it means that predictor helps explain the outcome.
+
+OLS also requires a continuous dependent variable and enough observations, usually at least 10 per predictor.  When data have a spatial component, the assumption that residuals are independent often does not hold. Block groups that are close together tend to have similar residuals. We can test this by calculating Moran's I of the OLS residuals, using the same Queen weight matrix and 999 permutations.
+
+Another way to test for spatial autocorrelation in the residuals is to regress the OLS residuals on the residuals of neighboring block groups. First, we calculate the weighted residual for each block group:
+
+$$WT\_RESIDU_i = \sum_{j} w_{ij}\, \varepsilon_j$$
+
+where $\varepsilon_j$ is the OLS residual of block group $j$ and $w_{ij}$ is the row-standardized Queen weight. Since each row of weights sums to 1, $WT\_RESIDU_i$ is simply the average residual of block group $i$'s neighbors. Then we run a simple regression:
+
+$$OLS\_RESIDU_i = a + b \cdot WT\_RESIDU_i + e_i$$
+
+The slope $b$, shown as *Slope b* below the scatterplot of OLS_RESIDU and WT_RESIDU, tells us how strongly a block group's residual is related to its neighbors' residuals. We test $H_0: b = 0$ against $H_a: b \neq 0$. If $b$ is positive and significant, the residuals are spatially autocorrelated.
+
+R can also test the other OLS assumptions. The first is homoscedasticity, which means the residuals have constant variance. This assumption is related to independence of errors. We test for heteroscedasticity using the Breusch-Pagan test, the Koenker-Bassett test (a version of Breusch-Pagan that does not require normally distributed residuals), and the White test (which also includes squared terms and interactions of the predictors). For all three tests, the null hypothesis is homoscedasticity, and the alternative hypothesis is heteroscedasticity.
+
+The second is normality of residuals, which we test using the Jarque-Bera test. This test checks whether the skewness and kurtosis of the residuals match those of a normal distribution. The null hypothesis is that the residuals are normally distributed, and the alternative hypothesis is that they are not.
 
 ## Spatial Lag and Spatial Error Regression
 
@@ -81,7 +204,120 @@ A further way to compare OLS with the spatial models is to examine the Moran’s
 
 ## Spatial Autocorrelation
 
+```{r p1-moran-dv-fig, echo=FALSE, fig.cap="Figure 1. Global Moran's I of LNMEDHVAL: Moran scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+par(mfrow = c(1, 2))
+x  <- df$LNMEDHVAL
+wx <- lag.listw(lw, x, zero.policy = TRUE)
+plot(x, wx, pch = 20, col = rgb(0, 0, 0, 0.3),
+     xlab = "LNMEDHVAL", ylab = "Spatially lagged LNMEDHVAL",
+     main = "Moran scatterplot")
+abline(lm(wx ~ x), lwd = 1.5)
+abline(v = mean(x), h = mean(wx), lty = 2)
+plot(mc_dv, main = "Permutation test (999 runs)", xlab = "Moran's I", sub = "")
+par(mfrow = c(1, 1))
+```
+
+The global Moran's I of LNMEDHVAL is `r round(mc_dv$statistic, 3)`. In the Moran scatterplot (Figure 1, left), most block groups fall in the High-High (upper right) and Low-Low (lower left) quadrants, and the fitted line, whose slope equals Moran's I, rises steeply. In the permutation test (Figure 1, right), the 999 permuted values are centered around 0 and none comes close to the observed value, giving a pseudo p-value of `r sub("= ", "", fmt_p(mc_dv$p.value))`. We reject the null hypothesis of no spatial autocorrelation and conclude that LNMEDHVAL is significantly and positively spatially autocorrelated. Block groups with high house values tend to be near other high-value block groups, and block groups with low values tend to be near other low-value block groups.
+
+```{r p1-lisa-sig, echo=FALSE, fig.cap="Figure 2. LISA significance map of LNMEDHVAL (999 permutations).", fig.width=7, fig.height=7, fig.align="center"}
+ggplot(df) +
+  geom_sf(aes(fill = lisa_sig), color = NA) +
+  scale_fill_manual(values = c("p <= 0.001" = "#006d2c", "p <= 0.01" = "#31a354",
+                               "p <= 0.05" = "#a1d99b", "Not significant" = "#eeeeee"),
+                    drop = FALSE, name = NULL) +
+  theme_void()
+```
+The significance map (Figure 2) shows that local spatial autocorrelation is concentrated in a few parts of the city. The strongest results (p ≤ 0.001) appear in the Northwest, in North Philadelphia, in Center City, and in parts of the Northeast. West and Southwest Philadelphia have scattered block groups that are significant at the 0.01 or 0.05 level. A large area running through the lower Northeast, along with most of South Philadelphia, is not significant, meaning house values there are not more similar to their neighbors' than we would expect by chance.
+
+```{r p1-lisa-cluster, echo=FALSE, fig.cap="Figure 3. LISA cluster map of LNMEDHVAL (p ≤ 0.05).", fig.width=7, fig.height=7, fig.align="center"}
+ggplot(df) +
+  geom_sf(aes(fill = lisa_cluster), color = NA) +
+  scale_fill_manual(values = c("Not significant" = "#eeeeee", "High-High" = "#d7191c",
+                               "Low-Low" = "#2c7bb6", "Low-High" = "#abd9e9",
+                               "High-Low" = "#f4a582"),
+                    drop = FALSE, name = NULL) +
+  theme_void()
+```
+
+Figures 2 and 3 show the local Moran's I results. Of the `r format(n_bg, big.mark = ",")` block groups, `r lisa_ct[["High-High"]]` are High-High, `r lisa_ct[["Low-Low"]]` are Low-Low, `r lisa_ct[["High-Low"]]` are High-Low, `r lisa_ct[["Low-High"]]` are Low-High, and `r format(lisa_ct[["Not significant"]], big.mark = ",")` are not significant.
+
+The cluster map (Figure 3) shows two very different parts of the city. The largest High-High clusters, where high-value block groups are surrounded by other high-value block groups, cover the Northwest and most of the Northeast. A second High-High area runs through Center City and along the Delaware river. Smaller High-High clusters appear in University City. The main Low-Low cluster covers a large, continuous area of North Philadelphia. Smaller Low-Low clusters appear in West & Southwest Philadelphia, and the area just southwest of Center City. High-Low and Low-High block groups are spatial outliers. Most sit at the edges of larger clusters, such as the Low-High block group next to the Northeast High-High cluster and the High-Low block groups inside the Low-Low area south of Center City.
+
 ## A Review of OLS Regression and Assumptions: Results
+
+```{r p1-table1, echo=FALSE}
+tab1_out <- tab1
+tab1_out$`Pr(>|t|)` <- ifelse(tab1$`Pr(>|t|)` < 0.001, "< 0.001",
+                              formatC(tab1$`Pr(>|t|)`, format = "f", digits = 3))
+knitr::kable(tab1_out, digits = 4, align = "rrrr",
+             caption = "Table 1. OLS regression results (dependent variable: LNMEDHVAL)")
+```
+
+Table 1 shows the OLS results. All four predictors are significant at p < 0.001. PCTBACHMOR and PCTSINGLES are positively associated with LNMEDHVAL, and PCTVACANT and LNNBELPOV are negatively associated with it. The model explains about `r round(100 * r2)`% of the variance in LNMEDHVAL (R² = `r round(r2, 3)`, adjusted R² = `r round(adj_r2, 3)`).
+
+```{r p1-diag, echo=FALSE}
+diag_out <- diag_tab
+diag_out$p_value <- ifelse(diag_tab$p_value < 0.001, "< 0.001",
+                           formatC(diag_tab$p_value, format = "f", digits = 3))
+names(diag_out)[4] <- "p-value"
+knitr::kable(diag_out, digits = 2, row.names = FALSE, align = "lrrr",
+             caption = "Table 1b. OLS residual diagnostics: heteroscedasticity and normality tests")
+```
+
+All three heteroscedasticity tests lead to the same conclusion (Table 1b). The Breusch-Pagan test (χ² = `r round(bp_test$statistic, 2)`, p `r fmt_p(bp_test$p.value)`), the Koenker-Bassett test (χ² = `r round(kb_test$statistic, 2)`, p `r fmt_p(kb_test$p.value)`), and the White test (χ² = `r round(white_test$statistic, 2)`, p `r fmt_p(white_test$p.value)`) are all significant, so we reject the null hypothesis of homoscedasticity. The variance of the OLS residuals is not constant, which violates the homoscedasticity assumption.
+
+```{r p1-resid-pred, echo=FALSE, fig.cap="Figure 4. Standardized residuals by predicted values, OLS (from HW 1).", fig.width=7, fig.height=4.5, fig.align="center"}
+ggplot(st_drop_geometry(df), aes(x = ols_fit, y = ols_std)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Predicted LNMEDHVAL", y = "Standardized residual") +
+  theme_minimal()
+```
+
+This is consistent with the plot of standardized residuals against predicted values from HW 1 (Figure 4). In HW 1, we noted that the spread of the residuals was mostly even but somewhat wider at the lowest and highest predicted values, which suggested mild heteroscedasticity. The formal tests confirm that this pattern is statistically significant.
+
+```{r p1-hist, echo=FALSE, fig.cap="Figure 5. Histogram of standardized OLS residuals (from HW 1).", fig.width=7, fig.height=4.5, fig.align="center"}
+ggplot(st_drop_geometry(df), aes(x = ols_std)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50,
+                 fill = "grey60", color = "white") +
+  stat_function(fun = dnorm, args = list(mean = 0, sd = 1),
+                color = "#d7191c", linewidth = 0.8) +
+  labs(x = "Standardized residual", y = "Density") +
+  theme_minimal()
+```
+
+The Jarque-Bera test is significant (JB = `r round(jb, 1)`, p `r fmt_p(jb_p)`), so we reject the null hypothesis that the residuals are normally distributed. This is consistent with the histogram of standardized residuals from HW 1 (Figure 5). The histogram is centered at zero, but it has a taller, narrower peak than a normal curve, a slightly longer left tail, and a few extreme values near ±6 (kurtosis = `r round(K, 2)`, skewness = `r round(S, 2)`). With 1,720 observations, the Jarque-Bera test is sensitive enough to detect these heavy tails even though most residuals look close to normal.
+
+```{r p1-wtres, echo=FALSE, fig.cap="Figure 6. OLS residuals (OLS_RESIDU) plotted against weighted residuals of Queen neighbors (WT_RESIDU).", fig.width=7, fig.height=5, fig.align="center"}
+ggplot(st_drop_geometry(df), aes(x = wt_res, y = ols_res)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, color = "#d7191c") +
+  labs(x = "WT_RESIDU (average residual of Queen neighbors)", y = "OLS_RESIDU",
+       subtitle = sprintf("Slope b = %.3f, SE = %.3f, t = %.2f, p %s",
+                          slope_b["Estimate"], slope_b["Std. Error"],
+                          slope_b["t value"], fmt_p(slope_b["Pr(>|t|)"]))) +
+  theme_minimal()
+```
+
+Figure 6 shows the OLS residuals plotted against the weighted residuals of their Queen neighbors. The points slope clearly upward, and Slope b is `r round(slope_b["Estimate"], 3)` (SE = `r round(slope_b["Std. Error"], 3)`, t = `r round(slope_b["t value"], 2)`, p `r fmt_p(slope_b["Pr(>|t|)"])`). So, when the average residual of a block group's neighbors increases by 1, the block group's own residual increases by about `r round(slope_b["Estimate"], 2)` on average. Because Slope b is positive and significant, block groups tend to have residuals similar to their neighbors. Where the model underpredicts house values, it tends to underpredict them in neighboring block groups as well and significant spatial autocorrelation in the OLS residuals.
+
+```{r p1-moran-ols-fig, echo=FALSE, fig.cap="Figure 7. Moran's I of OLS residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+par(mfrow = c(1, 2))
+x  <- df$ols_res
+wx <- lag.listw(lw, x, zero.policy = TRUE)
+plot(x, wx, pch = 20, col = rgb(0, 0, 0, 0.3),
+     xlab = "OLS residuals", ylab = "Lagged residuals",
+     main = "Moran scatterplot")
+abline(lm(wx ~ x), lwd = 1.5)
+abline(v = mean(x), h = mean(wx), lty = 2)
+plot(mc_ols, main = "Permutation test (999 runs)", xlab = "Moran's I", sub = "")
+par(mfrow = c(1, 1))
+```
+The Moran's I of the OLS residuals is `r round(mc_ols$statistic, 3)`, with a pseudo p-value of `r sub("= ", "", fmt_p(mc_ols$p.value))` from 999 permutations (Figure 7). In the Moran scatterplot, most block groups fall in the upper right and lower left quadrants, meaning that block groups with positive residuals tend to have neighbors with positive residuals, and the same is true for negative residuals. In the permutation test, the observed value lies far to the right of all 999 permuted values, which are centered around 0. We reject the null hypothesis and conclude that the OLS residuals are significantly and positively spatially autocorrelated. 
+
+This spatial autocorrelation is a problem because it violates the OLS assumption of independent observations. When residuals are spatially autocorrelated, OLS underestimates the standard errors, so the p-values are too small and the predictors may appear more significant than they really are. It also suggests that the model is missing variables that are themselves spatially patterned.
+
+Moran's I and Slope b are both positive and significant, indicating that the OLS residuals are spatially autocorrelated. We suggest a spatial regression model for this data. Slope b (`r round(slope_b["Estimate"], 3)`) is larger than Moran's I (`r round(mc_ols$statistic, 3)`) because the two statistics put the variables on opposite axes. Moran's I is the slope of the neighbors' average residual on a block group's own residual, while Slope b is the slope of a block group's own residual on its neighbors' average. Averaging over several neighbors smooths out the residuals, so WT_RESIDU varies less than OLS_RESIDU, which makes Slope b larger.
 
 ## Spatial Lag and Spatial Error Regression Results
 
