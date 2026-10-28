@@ -23,6 +23,7 @@ library(sf)
 library(spdep)
 library(spatialreg)
 library(tidyverse)
+library(spgwr)
 
 df <- st_read("data/RegressionData.shp/RegressionData.shp")
 nrow(df)
@@ -199,6 +200,11 @@ Breusch-Pagan test. For each spatial model we also test the residuals for hetero
 A further way to compare OLS with the spatial models is to examine the Moran’s I of the regression residuals, using 999 random permutations to assess significance, as described earlier. If a spatial model has accounted for the spatial dependence, the Moran’s I of its residuals should be close to zero and lower in magnitude than the Moran’s I of the OLS residuals. The model with the smaller residual Moran’s I (closer to zero) is considered to do a better job of removing spatial autocorrelation.
 
 ## Geographically Weighted Regression
+Lastly, in our analysis, we will run a geographically weighted regression (GWR) in R. The GWR equation is as follows:
+$$y_i = \beta_0(u_i, v_i) + \sum_{k=1}^{p} \beta_k(u_i, v_i) x_{ik} + \varepsilon_i$$
+By running a GWR, we can better understand the effect of the variable from place to place. In statistics, we may observe that a trend in subgroups reverses or disappears once the groups are combined (Simpson's paradox.) A local regression can fit a separate regression to the data to a specific neighborhood or localized prediction point. Nearby locations are weighted more heavily witha. kernel. We can do this for a GWR by altering the bandwidth. We have two options for bandwidth; fixed and adaptive. In our analysis, we will be using an adaptive bandwidth. A fixed bandwidth has a constant physical distance as the spatial kernel whereas an adaptive bandwidth bases the size of the spatial kernel on a constant number of nearest neighbors. In our case, the adaptive bandwidth is the most appropriate since the number of households and block groups vary by size. Adaptive bandwidth is best for data with heterogeneous data distributions, in this case, houses per census block is varied and not uniform. 
+
+OLS assumptions still hold in GWR. The variables must be linear in terms of coefficients and error. The error has a mean population of zero. The independent variables and their observations are not correlated with the error. The error term has constant variance and is normally distributed. None of the independent variables have a perfect linear relationship with each other. We try to avoid multicollinearity, when the independent variables are highly correlated with one another. One way to determine the strength of multicollinearity is through a condition number, the ratio of the largest and smallest singular values in a correlation matrix. We mention this because multicollinearity tends to occur in GWR because the sample size gets smaller when we cluster groups for a weighted regression. In that, there's less spatial variance which may lead to multicollinearity since these clusters only have each other to compare to for a relationship, making the data more sensitive to change. We may diagnose multicollinearity in our model with a condition number that is output from our GWR. If that number is greater than 30, or null, we may assume that local multicollinearity is occurring, making this estimate unstable.
 
 # Results
 
@@ -466,4 +472,34 @@ Because neither model is nested within the other, we do not use the likelihood r
 
 ## Geographically Weighted Regression Results
 
+```{r}
+#| label: setting the adaptive bandwidth
+#| include: false
+shps <- as(df, 'Spatial')  
+class (shps)
+
+bw<-gwr.sel(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV, 
+            data=shps,
+            method = "aic",
+            adapt = TRUE)
+```
+
+Below are the results for running the GWR with an adaptive bandwidth.
+```{r}
+#| label: running the GWR model
+
+bw <- 0.00813061875578336
+gwrmodel<-gwr(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV,
+              data=shps,
+              adapt = bw, 
+              gweight=gwr.Gauss,
+              se.fit=TRUE, 
+              hatmatrix = TRUE)
+gwrmodel
+```
+```{r}
+#| warning: false
+#| message: false
+summary(gwrmodel$SDF)
+```
 # Discussion
