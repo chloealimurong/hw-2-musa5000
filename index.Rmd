@@ -24,7 +24,7 @@ library(spdep)
 library(spatialreg)
 library(tidyverse)
 library(spgwr)
-
+library(tmap)
 df <- st_read("data/RegressionData.shp/RegressionData.shp")
 nrow(df)
 
@@ -294,7 +294,7 @@ ggplot(st_drop_geometry(df), aes(x = ols_std)) +
 
 The Jarque-Bera test is significant (JB = `r round(jb, 1)`, p `r fmt_p(jb_p)`), so we reject the null hypothesis that the residuals are normally distributed. This is consistent with the histogram of standardized residuals from HW 1 (Figure 5). The histogram is centered at zero, but it has a taller, narrower peak than a normal curve, a slightly longer left tail, and a few extreme values near ±6 (kurtosis = `r round(K, 2)`, skewness = `r round(S, 2)`). With 1,720 observations, the Jarque-Bera test is sensitive enough to detect these heavy tails even though most residuals look close to normal.
 
-```{r p1-wtres, echo=FALSE, fig.cap="Figure 6. OLS residuals (OLS_RESIDU) plotted against weighted residuals of Queen neighbors (WT_RESIDU).", fig.width=7, fig.height=5, fig.align="center"}
+```{r p1-wtres, echo=FALSE, message=FALSE, fig.cap="Figure 6. OLS residuals (OLS_RESIDU) plotted against weighted residuals of Queen neighbors (WT_RESIDU).", fig.width=7, fig.height=5, fig.align="center"}
 ggplot(st_drop_geometry(df), aes(x = wt_res, y = ols_res)) +
   geom_point(alpha = 0.4, size = 1) +
   geom_smooth(method = "lm", se = FALSE, color = "#d7191c") +
@@ -434,7 +434,7 @@ knitr::kable(fit_tab, digits = 2,
 
 Table 4 compares the models. Relative to OLS, the spatial lag model has a much higher log likelihood (-255.74 vs. -711.49) and much lower AIC (525.48 vs. 1434.99) and SC (563.63 vs. 1467.69). The likelihood ratio test is also highly significant (LR = 911.51, df = 1, p < 0.0001), so we reject the null hypothesis that OLS fits as well as the spatial lag model. On every one of these criteria the spatial lag model is clearly better than OLS.
 
-```{r moran-lag-fig, echo=FALSE, fig.cap="Figure X. Moran's I of spatial lag regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+```{r moran-lag-fig, echo=FALSE, fig.cap="Figure 8. Moran's I of spatial lag regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
 par(mfrow = c(1, 2))
 moran.plot(df$lag_res, lw, zero.policy = TRUE,
            xlab = "Spatial lag residuals", ylab = "Lagged residuals",
@@ -457,7 +457,7 @@ The Breusch-Pagan test on the spatial error residuals is not significant (BP = 5
 
 Relative to OLS, the spatial error model has a higher log likelihood (-372.69 vs. -711.49) and lower AIC (759.38 vs. 1434.99) and SC (797.53 vs. 1467.69). The likelihood ratio test is highly significant (LR = 677.61, df = 1, p < 0.0001), so the spatial error model fits significantly better than OLS.
 
-```{r moran-error-fig, echo=FALSE, fig.cap="Figure Y. Moran's I of spatial error regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
+```{r moran-error-fig, echo=FALSE, fig.cap="Figure 9. Moran's I of spatial error regression residuals: scatterplot (left) and 999-permutation distribution (right).", fig.width=10, fig.height=4.5, fig.align="center"}
 par(mfrow = c(1, 2))
 moran.plot(df$err_res, lw, zero.policy = TRUE,
            xlab = "Spatial error residuals", ylab = "Lagged residuals",
@@ -473,20 +473,31 @@ Because neither model is nested within the other, we do not use the likelihood r
 ## Geographically Weighted Regression Results
 
 ```{r}
-#| label: setting the adaptive bandwidth
+#| label: setting the adaptive bandwidth, only needs to be run once.
 #| include: false
 shps <- as(df, 'Spatial')  
 class (shps)
 
-bw<-gwr.sel(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV, 
-            data=shps,
-            method = "aic",
-            adapt = TRUE)
+#bw<-gwr.sel(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV, 
+           # data=shps,
+           # method = "aic",
+          #  adapt = TRUE)
 ```
 
-Below are the results for running the GWR with an adaptive bandwidth.
+Below are the results for running the GWR with an adaptive bandwidth. Compared to the OLS Regression's R-squared of : 0.66, the GWR model's R-squared is substantially higher at 0.85. This tells us that the GWR was better at finding a larger proportion of variation in median house value can be explained by our predictors.  
+
+When comparing the AIC to the other models in our analysis, the Spatial Lag model outperforms all of the models with the lowest AIC of 525.5 in terms of fit. This is a large contrast from our first model, OLS, which had an AIC of 1435. The GWR model was second best at 660.7 and Spatial Error at third place 759.4.
+
+Below is the Moran’s I scatterplot of GWR residuals and the 999-permutation distribution (Figure 10.) The almost flat slope of residuals shows that there's nearly a random pattern of residuals spatially. The points are also distributed evenly across all four quadrants, meaning that there's little to no spatial autocorrelation among the residuals in the GWR model. Compared to the OLS model, there is far less spatial autocorrelation. The difference is between the the lag and error models is that the residuals overshoot slightly into negative values, while the GWR residuals are closest to zero.
+
+
 ```{r}
 #| label: running the GWR model
+#| echo: false
+#| include: false
+#| fig.cap: "Figure 10. Moran's I of GWR residuals: scatterplot (left) and 999-permutation distribution (right)."
+#| fig.width: 10
+#| fig.height: 4.5
 
 bw <- 0.00813061875578336
 gwrmodel<-gwr(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPOV,
@@ -496,10 +507,133 @@ gwrmodel<-gwr(formula=LNMEDHVAL ~ PCTVACANT + PCTSINGLES + PCTBACHMOR + LNNBELPO
               se.fit=TRUE, 
               hatmatrix = TRUE)
 gwrmodel
+
+gwr_aic  <- gwrmodel$results$AICb
+
+
+# gwr residual moran
+
+gwrresults <- as.data.frame(gwrmodel$SDF)
+df$gwr_res <- gwrresults$gwr.e
+
+set.seed(500)
+mc_gwr <- moran.mc(df$gwr_res, lw, nsim = 999, zero.policy = TRUE,
+                   alternative = "two.sided")
+
+par(mfrow = c(1, 2))
+moran.plot(df$gwr_res, lw, zero.policy = TRUE,
+           xlab = "GWR residuals", ylab = "Lagged residuals",
+           main = "Moran scatterplot")
+plot(mc_gwr, main = "Permutation test (999 runs)", xlab = "Moran's I", sub = "")
+par(mfrow = c(1, 1))
+mc_gwr
+
+aic_tab <- data.frame(
+  Model = c("OLS", "Spatial Lag", "Spatial Error", "GWR"),
+  AIC   = c(AIC(ols), AIC(lag_model), AIC(err_model), gwr_aic),
+  MoranI = c(mc_ols$statistic, mc_lag$statistic,
+             mc_err$statistic, mc_gwr$statistic),
+  p_value = c(mc_ols$p.value, mc_lag$p.value,
+              mc_err$p.value, mc_gwr$p.value)
+)
+
+# Label the pattern from the sign, size and significance of Moran's I
+aic_tab$Pattern <- ifelse(aic_tab$p_value >= 0.05, "No significant autocorrelation",
+                   ifelse(aic_tab$MoranI > 0.2,   "Strong positive",
+                   ifelse(aic_tab$MoranI > 0.05,  "Moderate positive",
+                   ifelse(aic_tab$MoranI > 0,     "Slight positive",
+                   ifelse(aic_tab$MoranI > -0.2,  "Slight negative",
+                                                   "Negative")))))
+
+aic_tab <- aic_tab[order(aic_tab$AIC), ]
+knitr::kable(aic_tab, digits = 3, row.names = FALSE,
+             caption = "Table 5. AIC and residual Moran's I for all four models")
 ```
+
+Now we shall observe local GWR results.
+Below is a map of the standardized coefficients. The higher the absolute value of the ratio between the coefficient and the standard error, the more plausible it is that the relationship between the predictor and the dependent variable is significant at the location. For single households, West and North Philly have a higher value ratio, indicating potential significance with median house value. For the percent of households with Bachelor's degree or more, almost all of Philly has the potential to have a significant relationship with median house value. This is very different in comparison to the percent of vacancies and the number living below poverty, where the areas of potential significance are sparse (north philly or pockets within Center City). 
 ```{r}
-#| warning: false
-#| message: false
-summary(gwrmodel$SDF)
+#| label: gwr ratio maps
+#| include: false
+#| fig.cap: "Figure 11. Ratio of GWR coefficient to standard error, by predictor."
+#| fig.width: 10
+#| fig.height: 8
+
+ratio_cols <- c('#d7191c', '#f4a582', '#abd9e9', '#2c7bb6')
+ratio_brks <- c(-Inf, -2, 0, 2, Inf)
+
+make_map <- function(var, main) {
+  tm_shape(shps_sf) +
+    tm_polygons(fill = var,
+                fill.scale = tm_scale_intervals(breaks = ratio_brks,
+                                                values = ratio_cols),
+                fill.legend = tm_legend(title = "Coef / SE"),
+                col = NA) +
+    tm_title(main) +
+    tm_layout(frame = FALSE)
+}
+
+gwrresults <- as.data.frame(gwrmodel$SDF)
+shps_sf <- st_as_sf(shps)
+shps_sf$localR2 <- gwrresults$localR2
+
+shps_sf$coefPCTVACANTst  <- gwrresults$PCTVACANT  / gwrresults$PCTVACANT_se
+shps_sf$coefPCTSINGLESst <- gwrresults$PCTSINGLES / gwrresults$PCTSINGLES_se
+shps_sf$coefPCTBACHMORst <- gwrresults$PCTBACHMOR / gwrresults$PCTBACHMOR_se
+shps_sf$coefLNNBELPOVst  <- gwrresults$LNNBELPOV  / gwrresults$LNNBELPOV_se
+
+tmap_arrange(make_map('coefPCTVACANTst',  'PCTVACANT'),
+             make_map('coefPCTSINGLESst', 'PCTSINGLES'),
+             make_map('coefPCTBACHMORst', 'PCTBACHMOR'),
+             make_map('coefLNNBELPOVst',  'LNNBELPOV'),
+             ncol = 2)
+```
+Below is the choropleth map of local R-squares, in GWR, this is a map of goodness-of-fit for our data. The higher the values (closer to 1.0) mean the local model explains a large portion of the variation in median house value for that specific area. Very low values mean the model performs poorly in that region. We can see our lowest values are in Northwest Philly and pockets of Center City and South/Southwest Philly. Our highest values of local r-squares are concentrated mainly in West Philly.
+
+The table (Figure 12) also summarizes the spatial distribution of local coefficient significance across block groups. The percent of households with a Bachelor's degree or more exhibited the strongest positive association, with 68.7% of block groups having coefficient-to-standard-error ratios greater than 2 and no block groups exhibiting significantly negative coefficients. In contrast, the percent of single households displayed greater spatial variation in the direction of its relationship with the dependent variable, with 16.4% of block groups showing significantly positive coefficients and 13.9% showing significantly negative coefficients. The percent of vacancies and the number below poverty were predominantly nonsignificant, although 36.0% and 21.3% of block groups, respectively, exhibited significantly negative coefficients. Overall, these findings suggest that the predictors vary in the consistency and direction of their local relationships with the dependent variable, with educational attainment demonstrating the most consistent positive association and the remaining predictors exhibiting more localized or heterogeneous relationships.
+```{r}
+#| label: local r2 map
+#| echo: false
+#| fig.cap: "Figure 12. Local R-squared from the GWR."
+
+# Build every GWR column in one place
+gwrresults <- as.data.frame(gwrmodel$SDF)
+shps_sf <- st_as_sf(shps)
+
+shps_sf$coefPCTVACANTst  <- gwrresults$PCTVACANT  / gwrresults$PCTVACANT_se
+shps_sf$coefPCTSINGLESst <- gwrresults$PCTSINGLES / gwrresults$PCTSINGLES_se
+shps_sf$coefPCTBACHMORst <- gwrresults$PCTBACHMOR / gwrresults$PCTBACHMOR_se
+shps_sf$coefLNNBELPOVst  <- gwrresults$LNNBELPOV  / gwrresults$LNNBELPOV_se
+shps_sf$localR2          <- gwrresults$localR2
+
+# Local R-squared map
+tm_shape(shps_sf) +
+  tm_polygons(fill = "localR2",
+              fill.scale = tm_scale_intervals(style = "quantile", n = 5,
+                                              values = "brewer.blues"),
+              fill.legend = tm_legend(title = "Local R²"),
+              col = NA) +
+  tm_layout(frame = FALSE)
+
+# Local summary: share of block groups in each ratio category
+ratios <- st_drop_geometry(shps_sf)[, c("coefPCTVACANTst", "coefPCTSINGLESst",
+                                        "coefPCTBACHMORst", "coefLNNBELPOVst")]
+sig_tab <- data.frame(
+  Predictor        = c("PCTVACANT", "PCTSINGLES", "PCTBACHMOR", "LNNBELPOV"),
+  `Ratio < -2 (%)` = sapply(ratios, function(x) round(100 * mean(x < -2), 1)),
+  `-2 to 2 (%)`    = sapply(ratios, function(x) round(100 * mean(abs(x) <= 2), 1)),
+  `Ratio > 2 (%)`  = sapply(ratios, function(x) round(100 * mean(x > 2), 1)),
+  check.names = FALSE, row.names = NULL)
+
+r2_min  <- min(shps_sf$localR2)
+r2_max  <- max(shps_sf$localR2)
+r2_mean <- mean(shps_sf$localR2)
+
+knitr::kable(sig_tab, caption = "Table 6. Share of block groups by coefficient / SE ratio")
 ```
 # Discussion
+Our report examined the relationship between median house values and four neighborhood characteristics in Philadelphia using OLS, spatial lag, spatial error, and geographically weighted regression (GWR). The results show that median house values are positively spatially autocorrelated, and that the OLS residuals also exhibit significant positive spatial autocorrelation. Both spatial regression models improved on OLS, while the spatial lag model had the best overall fit based on log likelihood, AIC, and SC. GWR also improved model fit relative to OLS and revealed that the relationships between neighborhood characteristics and median house values vary across block groups. Among the GWR predictors, the percentage of residents with a bachelor's degree or higher had the most consistent positive local association, while the other predictors showed more localized or spatially variable relationships.
+
+There were several limitations to these models. The OLS residuals violated the assumptions of independent errors, constant variance, and normality: Moran's I indicated significant spatial autocorrelation, the Breusch-Pagan, Koenker-Bassett, and White tests indicated heteroscedasticity, and the Jarque-Bera test indicated non-normal residuals. The spatial lag model reduced residual spatial autocorrelation but still exhibited heteroscedasticity. The spatial error model did not show significant residual heteroscedasticity and reduced spatial autocorrelation, although its residual Moran's I remained significantly negative. GWR captured local variation, but local estimates may be unstable where multicollinearity is high, and local coefficient significance should be interpreted cautiously because many locations are tested. The models also include only four neighborhood predictors, so omitted factors may explain additional variation in house values. Based on the reported fit statistics, the spatial lag model performed best overall, although its remaining heteroscedasticity is an important limitation.
+
+Weighted (spatially lagged) residuals are different from spatial lag model residuals. The weighted residual used in the OLS diagnostic is the average of neighboring block groups' OLS residuals, calculated using the Queen contiguity weights. Regressing the OLS residuals on this weighted residual helps test whether a block group's unexplained error is related to the errors of its neighbors. By contrast, spatial lag model residuals are the residuals remaining after fitting a model that includes neighboring block groups' median house values as a predictor through the spatial lag term. Spatially lagged residuals are therefore a diagnostic variable constructed from the OLS residuals, whereas spatial lag model residuals are errors left over after estimating the spatial lag regression. These terms describe different quantities and should not be used interchangeably.
